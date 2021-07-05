@@ -81,7 +81,7 @@ struct sockaddr_in connection(int _socket, struct Packet *_handshake){
 				//wait for SYNC
 				recvFromClient(_socket, &_client, _handshake);
 				printf("recv SYNC %d data %d\n", _handshake->flags, _handshake->data);
-				//_status++;
+				_status++;
 				break;
 			case 1:
 				//Send SYNC + ACK

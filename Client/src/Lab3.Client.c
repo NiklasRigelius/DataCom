@@ -93,7 +93,8 @@ void connection(int _socket, struct sockaddr_in _server, struct Packet *_handsha
 	//Setup for timeouts
 	fd_set _fdSet;
 	struct timeval _timeout;
-
+	FD_ZERO(&_fdSet);
+	FD_SET(_socket, &_fdSet);
 
 
 	int _status = 0;
@@ -116,13 +117,12 @@ void connection(int _socket, struct sockaddr_in _server, struct Packet *_handsha
 
 				_timeout.tv_sec = 5;
 				_timeout.tv_usec = 0;
-				_checker = select(1, &_fdSet, NULL, NULL, &_timeout);
-				if(_checker < 0){
-					printf("_chekcer 1 = %d\n", _checker);
+				_checker = select(FD_SETSIZE, &_fdSet, NULL, NULL, &_timeout);
+				if(_checker <= 0){
+					printf("_checker = %d\n", _checker);
 					printf("TIMEOUT: resending ACK...\n");
 					_status = 0;
-				}else {
-					printf("_chekcer 2 = %d\n", _checker);
+				} else {
 					recvFromServer(_socket, _server, _handshake);
 					printf("recv SYNC + ACK %d  id  %d\n", _handshake->flags, _handshake->id);
 					_status++;
