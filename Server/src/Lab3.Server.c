@@ -15,6 +15,7 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include<netinet/in.h>
+#include <unistd.h>
 
 struct Packet{
 	int flags;  //0 = nothing, 1 = ACK, 2 = SYNC + ACK, 3 = SYNC, 4 = NAK, 5 = FIN
@@ -30,6 +31,8 @@ void recvFromClient(int _socket, struct sockaddr_in *_client, struct Packet *_pa
 void sendToClient(int _socket, struct sockaddr_in _client, struct Packet _packet);
 
 struct sockaddr_in connection(int _socket, struct Packet *_handshake);
+
+void goBackN(int _socket,  struct sockaddr_in _client, int _seqMax);
 
 int main(int argc, char *argv[]) {
 	puts("!!!Hello World!!!"); /* prints !!!Hello World!!! */
@@ -47,6 +50,9 @@ int main(int argc, char *argv[]) {
 
 	connection(_socket, &_handshake);
 
+	printf("Connected\n");
+
+	goBackN(_socket, _server, (_handshake.windowSize * 2) + 1);
 	return EXIT_SUCCESS;
 }
 
@@ -74,6 +80,13 @@ struct sockaddr_in connection(int _socket, struct Packet *_handshake){
 	struct sockaddr_in _client;
 	int _status = 0;
 	int _active = 1;
+	int _checker = 0;
+	//Setup for timeouts
+	fd_set _fdSet;
+	struct timeval _timeout;
+	FD_ZERO(&_fdSet);
+	FD_SET(_socket, &_fdSet);
+
 	//TODO: remove : 0 = nothing, 1 = ACK, 2 = SYNC + ACK, 3 = SYNC, 4 = NAK, 5 = FIN
 	while(_active){
 		switch (_status){
@@ -93,15 +106,53 @@ struct sockaddr_in connection(int _socket, struct Packet *_handshake){
 				break;
 			case 2:
 				//start timer N wait for ACK
+				FD_ZERO(&_fdSet);
+				FD_SET(_socket, &_fdSet);
+				_timeout.tv_sec = 5;
+				_timeout.tv_usec = 0;
+				_checker = select(FD_SETSIZE, &_fdSet, NULL, NULL, &_timeout);
+				if(_checker <= 0){
+					printf("_checker = %d\n", _checker);
+					printf("TIMEOUT: resending SYNC + ACK...\n");
+					_status = 1;
+				} else {
+					recvFromClient(_socket, &_client, _handshake);
+					printf("recv ACK %d\n", _handshake->flags);
+					_status++;
+					_active = 0;
+				}
 
-				recvFromClient(_socket, &_client, _handshake);
-				printf("recv ACK %d\n", _handshake->flags);
-				_status++;
-				_active = 0;
 				break;
 		}
 	}
 	return _client;
+}
+
+void goBackN(int _socket, struct sockaddr_in _client, int _seqMax){
+	int _expectedSeq = 0, _send = 1;
+
+	//Setup for timeouts
+	fd_set _fdSet;
+	struct timeval _timeout;
+	FD_ZERO(&_fdSet);
+	FD_SET(_socket, &_fdSet);
+
+	struct Packet _frame = {-1, -1, -1, -1, -1};  //Junk
+	while(_send){
+		sleep(1);
+		recvFromClient(_socket, &_client, &_frame);
+		if(_frame.seq != _expectedSeq){
+			//Wrong seq
+			printf("Wrong seq, sending NAK \n");
+			_frame.flags = 4;
+			sendToClient(_socket, _client, _frame);
+		} else if(_frame.seq == _expectedSeq){
+			printf("Data recv %d seq %d\n", _frame.data, _frame.seq);
+			_frame.flags = 1;
+			sendToClient(_socket, _client, _frame);
+			_expectedSeq = _expectedSeq % _seqMax;
+		}
+	}
 }
 
 void sendToClient(int _socket, struct sockaddr_in _client, struct Packet _packet){

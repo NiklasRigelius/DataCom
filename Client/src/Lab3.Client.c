@@ -38,6 +38,8 @@ void connection(int _socket, struct sockaddr_in _server, struct Packet *_handsha
 
 int * userInteraction(struct Packet *_handshake, int * _nrOfData);
 
+void goBackN(int _socket, struct sockaddr_in _server, struct Packet _header, int * _data, int _nrOfData);
+
 int main(int argc, char *argv[]) {
 	puts("!!!Hello World 2!!!"); /* prints !!!Hello World!!! */
 
@@ -55,8 +57,12 @@ int main(int argc, char *argv[]) {
 	_server = initSocket(&_socket, argv);
 
 	_data = userInteraction(&_handshake, &_nrOfData);
-	_handshake.data = _data[0];
+
 	connection(_socket, _server, &_handshake);
+
+	printf("Connected to the server\n");
+
+	goBackN(_socket, _server, _handshake, _data, _nrOfData);
 
 
 	return EXIT_SUCCESS;
@@ -114,7 +120,6 @@ void connection(int _socket, struct sockaddr_in _server, struct Packet *_handsha
 				//Timer
 				FD_ZERO(&_fdSet);
 				FD_SET(_socket, &_fdSet);
-
 				_timeout.tv_sec = 5;
 				_timeout.tv_usec = 0;
 				_checker = select(FD_SETSIZE, &_fdSet, NULL, NULL, &_timeout);
@@ -125,7 +130,7 @@ void connection(int _socket, struct sockaddr_in _server, struct Packet *_handsha
 				} else {
 					recvFromServer(_socket, _server, _handshake);
 					printf("recv SYNC + ACK %d  id  %d\n", _handshake->flags, _handshake->id);
-					_status++;
+					_status ++;
 				}
 				break;
 			case 2:
@@ -168,6 +173,74 @@ int * userInteraction(struct Packet *_handshake, int * _nrOfData){
 
 	return _data;
 }
+
+void goBackN(int _socket, struct sockaddr_in _server, struct Packet _header, int * _data, int _nrOfData){
+	int _send = 1, _start = 0, _end = 0, _currentSeq = 0, _expectedSeq = 0;
+	int _windowsAvailable = _header.windowSize;
+	int _checker =0 ;
+	int _seqMax = (_header.windowSize * 2) + 1;
+
+	//Setup for timeouts
+	fd_set _fdSet;
+	struct timeval _timeout;
+	FD_ZERO(&_fdSet);
+	FD_SET(_socket, &_fdSet);
+
+	struct Packet _frame = _header;
+	while(_send){
+		//If there is free space in window -> send frame
+		if(_windowsAvailable > 0){
+			_frame.flags = 0;
+			_frame.seq = _currentSeq % _seqMax;
+			_frame.data = _data[_end];
+			printf("Sending frame seq %d data %d\n", _frame.seq, _frame.data);
+			sendToServer(_socket, _server, _frame);
+			_windowsAvailable --;
+			_currentSeq ++;
+			_end++;
+		}
+
+		//Listen for ACKs briefly
+		_timeout.tv_sec = 0;
+		_timeout.tv_usec = 1;
+		_checker = select(FD_SETSIZE, &_fdSet, NULL, NULL, &_timeout);
+		if(_checker < 0){
+			//ERROR
+		} else if(_checker > 0){
+			recvFromServer(_socket, _server, &_frame);
+			if(_frame.flags == 1){ //move window to the "right"
+				_start++;
+				_windowsAvailable++;
+				_expectedSeq = (_expectedSeq + 1) % _seqMax;
+			} else{ //resend window
+				_end = _start;
+				_windowsAvailable = _header.windowSize;
+				_currentSeq = _expectedSeq;
+			}
+		}
+
+		//If _windowsAvailable is 0 then wait for 3 sec and resend if no ack is recv...
+		if(_windowsAvailable == 0){	//Wait for ACK's for 3sec then timeout -> resend window
+			_timeout.tv_sec = 3;
+			_timeout.tv_usec = 0;
+			_checker = select(FD_SETSIZE, &_fdSet, NULL, NULL, &_timeout);
+			if(_checker < 0){
+				//Error
+			} else if(_checker == 0){
+				//No msg -> resend
+				_end = _start;
+				_windowsAvailable = _header.windowSize;
+				_currentSeq = _expectedSeq;
+			} else {
+				//recv msg -> free space in window
+				_start++;
+				_windowsAvailable++;
+				_expectedSeq = (_expectedSeq + 1) % _seqMax;
+			}
+		}
+	}
+}
+
 
 void sendToServer(int _socket, struct sockaddr_in _server, struct Packet _packet){
 	int _checker;
