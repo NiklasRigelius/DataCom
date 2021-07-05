@@ -17,7 +17,7 @@
 #include<netinet/in.h>
 
 struct Packet{
-	int flags;
+	int flags;  //0 = nothing, 1 = ACK, 2 = SYNC + ACK, 3 = SYNC, 4 = NAK, 5 = FIN
 	int seq;
 	int id;
 	int windowSize;
@@ -29,11 +29,14 @@ struct sockaddr_in initSocket(int * _socket, int port);
 void recvFromClient(int _socket, struct sockaddr_in *_client, struct Packet *_packet);
 void sendToClient(int _socket, struct sockaddr_in _client, struct Packet _packet);
 
+struct sockaddr_in connection(int _socket, struct Packet *_handshake);
+
 int main(int argc, char *argv[]) {
 	puts("!!!Hello World!!!"); /* prints !!!Hello World!!! */
 
 	int _socket;
 	struct sockaddr_in _server;
+	struct Packet _handshake = {-1, -1, -1, -1, -1}; //Junk values
 
 	if(argc < 2){
 	    perror("ERROR, Not enough arguments\n");
@@ -41,13 +44,8 @@ int main(int argc, char *argv[]) {
 	}
 
 	_server = initSocket(&_socket, atoi(argv[1]));
-	printf("%d\n", _socket);
-	struct sockaddr_in _client;
-	struct Packet _packet = {-1, -1, -1, -1, -1};
-	recvFromClient(_socket, &_client, &_packet);
-	_packet.data = 2;
-	sendToClient(_socket, _client, _packet);
 
+	connection(_socket, &_handshake);
 
 	return EXIT_SUCCESS;
 }
@@ -72,6 +70,40 @@ struct sockaddr_in initSocket(int *_socket, int port){
 	return _server;
 }
 
+struct sockaddr_in connection(int _socket, struct Packet *_handshake){
+	struct sockaddr_in _client;
+	int _status = 0;
+	int _active = 1;
+	//TODO: remove : 0 = nothing, 1 = ACK, 2 = SYNC + ACK, 3 = SYNC, 4 = NAK, 5 = FIN
+	while(_active){
+		switch (_status){
+			case 0:
+				//wait for SYNC
+				recvFromClient(_socket, &_client, _handshake);
+				printf("recv SYNC %d data %d\n", _handshake->flags, _handshake->data);
+				//_status++;
+				break;
+			case 1:
+				//Send SYNC + ACK
+				_handshake->flags = 2;
+				_handshake->id = 10;
+				sendToClient(_socket, _client, *_handshake);
+				printf("send to client SYNC + ACK %d id = %d\n", _handshake->flags, _handshake->id);
+				_status++;
+				break;
+			case 2:
+				//start timer N wait for ACK
+
+				recvFromClient(_socket, &_client, _handshake);
+				printf("recv ACK %d\n", _handshake->flags);
+				_status++;
+				_active = 0;
+				break;
+		}
+	}
+	return _client;
+}
+
 void sendToClient(int _socket, struct sockaddr_in _client, struct Packet _packet){
 	int _checker;
 
@@ -80,7 +112,6 @@ void sendToClient(int _socket, struct sockaddr_in _client, struct Packet _packet
 	    perror("ERROR, Could not send\n");
 	    exit(EXIT_FAILURE);
 	}
-	printf("Sent data %d\n", _packet.data);
 }
 
 void recvFromClient(int _socket, struct sockaddr_in *_client, struct Packet *_packet){
@@ -92,5 +123,4 @@ void recvFromClient(int _socket, struct sockaddr_in *_client, struct Packet *_pa
 	    perror("ERROR, Could not recv\n");
 	    exit(EXIT_FAILURE);
 	}
-	printf("Recv data %d\n", _packet->data);
 }
