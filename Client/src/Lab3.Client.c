@@ -40,6 +40,7 @@ void connection(int _socket, struct sockaddr_in _server, struct Packet *_handsha
 int * userInteraction(struct Packet *_handshake, int * _nrOfData);
 
 void goBackN(int _socket, struct sockaddr_in _server, struct Packet _header, int * _data, int _nrOfData);
+int waitForResponse(int _socket, struct sockaddr_in _server, int _sec, int _usec, int _expectedSeq);
 
 int main(int argc, char *argv[]) {
 	puts("!!!Hello World 2!!!"); /* prints !!!Hello World!!! */
@@ -176,16 +177,12 @@ int * userInteraction(struct Packet *_handshake, int * _nrOfData){
 }
 
 void goBackN(int _socket, struct sockaddr_in _server, struct Packet _header, int * _data, int _nrOfData){
-	int _start = 0, _end = 0; //_currentSeq = 0, _expectedSeq = 0;
+	int _start = 0, _end = 0, _sentFrames = 0, _recvACK = 0;
 	int _windowsAvailable = _header.windowSize;
-	int _checker = 0, _sentFrames = 0, _recvACK = 0;
 	int _seqMax = (_header.windowSize * 2) + 1;
 
-	//Setup for timeouts
-	fd_set _fdSet;
-	struct timeval _timeout;
-
 	struct Packet _frame = _header;
+
 	while(!(_sentFrames == _nrOfData && _recvACK == _nrOfData)){
 		//If there is free space in window -> send frame
 		if(_windowsAvailable > 0 && _sentFrames != _nrOfData){
@@ -201,68 +198,81 @@ void goBackN(int _socket, struct sockaddr_in _server, struct Packet _header, int
 			printf("------------------------------\n");
 		}
 
-		//Listen for ACKs briefly
-		_timeout.tv_sec = 0;
-		_timeout.tv_usec = 1;
-		FD_ZERO(&_fdSet);
-		FD_SET(_socket, &_fdSet);
-		_checker = select(FD_SETSIZE, &_fdSet, NULL, NULL, &_timeout);
-		if(_checker < 0){
-			//ERROR
-		} else if(_checker > 0){
-			recvFromServer(_socket, _server, &_frame);
-			if(_frame.flags == 1 && _frame.seq == (_start % _seqMax)){ //move window to the "right"
-				printf("RECEIVED ACK: data %d, seq %d, _start %d, _seqMax %d\n", _frame.data, _frame.seq, _start, _seqMax);
+		int _recvStatus;
+		//Do a quick check to see if there is any incoming msg
+		//we are only interesting in ACKs and NAKs here, if timeout is triggered just continue
+		//The timer is set to 0 sec, 1 usec
+		_recvStatus = waitForResponse(_socket, _server, 0, 1, (_start % _seqMax));
+		if(_recvStatus == 1){  //recv an ACK
+			_start++;
+			_windowsAvailable++;
+			_recvACK ++;
+		}
+		else if(_recvStatus == -2){ //recv an NAK
+			_end = _start;
+			_windowsAvailable = _header.windowSize;
+			_sentFrames -= (_end - _start) + 1;
+			_recvACK = _sentFrames;
+		}
+
+		//If there is no windows available we need to wait for ACK, NAK or timeout
+		//Timer is set to 5 sec, if no response from server is available we resend the packets
+		//We are therefore interested in if the timer is triggered
+		if(_windowsAvailable == 0){
+			_recvStatus = waitForResponse(_socket, _server, 5, 0, (_start % _seqMax));
+			if(_recvStatus == 1){  //recv an ACK
 				_start++;
 				_windowsAvailable++;
 				_recvACK ++;
-			} else { //resend window
-				printf("RECEIVED NAK: data %d, seq %d, _start %d, _seqMax %d\n", _frame.data, _frame.seq, _start, _seqMax);
-				_end = _start;
-				_windowsAvailable = _header.windowSize;
-				_sentFrames -= (_end - _start) + 1;
-				_recvACK = _sentFrames;
 			}
-		}
-
-		//If _windowsAvailable is 0 then wait for 3 sec and resend if no ack is recv...
-		if(_windowsAvailable == 0){	//Wait for ACK's for 3sec then timeout -> resend window
-			_timeout.tv_sec = 5;
-			_timeout.tv_usec = 0;
-			FD_ZERO(&_fdSet);
-			FD_SET(_socket, &_fdSet);
-			_checker = select(FD_SETSIZE, &_fdSet, NULL, NULL, &_timeout);
-			if(_checker < 0){
-				//Error
-			} else if(_checker == 0){
-				//No msg -> resend
-				printf("TIMEOUT \n");
+			else if(_recvStatus == -1 ||_recvStatus == -2){ //if timer is triggered or NAK was received
 				_end = _start;
 				_windowsAvailable = _header.windowSize;
 				_sentFrames -= (_end - _start) + 1;
 				_recvACK = _sentFrames;
-			} else {
-				//recv msg -> free space in window
-				recvFromServer(_socket, _server, &_frame);
-				if(_frame.flags == 1 && _frame.seq == (_start % _seqMax)){ //move window to the "right"
-
-					printf("RECEIVED ACK: data %d, seq %d, _start %d, _seqMax %d\n", _frame.data, _frame.seq, _start, _seqMax);
-					_start++;
-					_windowsAvailable++;
-					_recvACK ++;
-				} else{ //resend window
-					printf("RECEIVED NAK: data %d, seq %d, _start %d, _seqMax %d\n", _frame.data, _frame.seq, _start, _seqMax);
-					_end = _start;
-					_windowsAvailable = _header.windowSize;
-					_sentFrames -= (_end - _start) + 1;
-					_recvACK = _sentFrames;
-				}
 			}
 		}
 	}
 	printf("After while in GoBackN\n");
 }
+//returns 1 if ACK is recv
+//returns -1 if timer is triggered
+//return -2 if NAK is recv
+int waitForResponse(int _socket, struct sockaddr_in _server, int _sec, int _usec, int _expectedSeq){
+	//Setup for timeouts
+	fd_set _fdSet;
+	FD_ZERO(&_fdSet);
+	FD_SET(_socket, &_fdSet);
+	struct timeval _timeout;
+	_timeout.tv_sec = _sec;
+	_timeout.tv_usec = _usec;
 
+	struct Packet _recv = {-1, -1, -1, -1,-1}; //Junk value;
+	int _checker;
+
+	_checker = select(FD_SETSIZE, &_fdSet, NULL, NULL, &_timeout);
+	if(_checker < 0){
+		//TODO: ERROR
+	}
+	else if(_checker == 0){ //timer triggered
+		//No msg -> resend
+		if(_usec == 0) printf("TIMEOUT \n");
+		return -1;
+	}
+	else {
+		//recv msg -> check if correct flag and seq
+		recvFromServer(_socket, _server, &_recv);
+		if(_recv.flags == 1 && _recv.seq == _expectedSeq){ //move window to the "right"
+			printf("RECEIVED ACK: data %d, seq %d\n", _recv.data, _recv.seq);
+			return 1;
+		}
+		else{ //resend window
+			printf("RECEIVED NAK: data %d, seq %d\n", _recv.data, _recv.seq);
+			return -2;
+		}
+	}
+	return -1;
+}
 
 void sendToServer(int _socket, struct sockaddr_in _server, struct Packet _packet){
 	int _checker;
