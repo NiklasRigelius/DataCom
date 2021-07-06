@@ -22,12 +22,15 @@
 #include <sys/select.h>
 #include <unistd.h>
 
+#define msgLength 256
+
 struct Packet{
 	int flags;
 	int seq;
 	int id;
 	int windowSize;
-	int data;
+	int integerData;
+	char data [msgLength];
 };
 
 struct sockaddr_in initSocket(int *_socket, char * argv[]);
@@ -37,9 +40,9 @@ void recvFromServer(int _socket, struct sockaddr_in _server, struct Packet *_pac
 
 void connection(int _socket, struct sockaddr_in _server, struct Packet *_handshake);
 
-int * userInteraction(struct Packet *_handshake, int * _nrOfData);
+int * userInteraction(struct Packet *_handshake, int * _nrOfintegerData);
 
-void goBackN(int _socket, struct sockaddr_in _server, struct Packet _header, int * _data, int _nrOfData);
+void goBackN(int _socket, struct sockaddr_in _server, struct Packet _header, int * _integerData, int _nrOfintegerData);
 int waitForResponse(int _socket, struct sockaddr_in _server, int _sec, int _usec, int _expectedSeq);
 
 int main(int argc, char *argv[]) {
@@ -48,8 +51,8 @@ int main(int argc, char *argv[]) {
 	int _socket;
 	struct sockaddr_in _server;
 	struct Packet _handshake = {-1, -1, -1, -1, -1}; //JUNK values
-	int * _data; //TODO: make sure its cleared
-	int _nrOfData = 0;
+	int * _integerData; //TODO: make sure its cleared
+	int _nrOfintegerData = 0;
 
 	if(argc != 3){
 	    perror("ERROR, not enough arguments\n");
@@ -58,13 +61,13 @@ int main(int argc, char *argv[]) {
 
 	_server = initSocket(&_socket, argv);
 
-	_data = userInteraction(&_handshake, &_nrOfData);
+	_integerData = userInteraction(&_handshake, &_nrOfintegerData);
 
 	connection(_socket, _server, &_handshake);
 	printf("--------------------------------\n");
 	printf("Connected to the server\n");
 	printf("--------------------------------\n");
-	goBackN(_socket, _server, _handshake, _data, _nrOfData);
+	goBackN(_socket, _server, _handshake, _integerData, _nrOfintegerData);
 
 
 	return EXIT_SUCCESS;
@@ -147,7 +150,7 @@ void connection(int _socket, struct sockaddr_in _server, struct Packet *_handsha
 	}
 }
 
-int * userInteraction(struct Packet *_handshake, int * _nrOfData){
+int * userInteraction(struct Packet *_handshake, int * _nrOfintegerData){
 	int _validator = 1;
 	//Window Size
 	while(_validator){
@@ -155,45 +158,68 @@ int * userInteraction(struct Packet *_handshake, int * _nrOfData){
 		scanf("%d", &(*_handshake).windowSize);
 		if(_handshake->windowSize > 0) _validator = 0;
 	}
+
+	//Enter messages
 	_validator = 1;
-	//Fill data
+	int _nrOfMsg = 0;
 	while(_validator){
-		printf("Enter number of data (more than 0): \n");
-		scanf("%d", _nrOfData);
-		if(*_nrOfData > 0) _validator = 0;
+		printf("Enter number of messages to send (more than 0): \n");
+		scanf("%d", &_nrOfMsg);
+		if(_nrOfMsg > 0) _validator = 0;
 	}
-	int * _data = (int *)malloc(sizeof(int) * (*_nrOfData));
-	if(_data == NULL){
+	char msg[_nrOfMsg][msgLength];
+	printf("Write your messages : \n");
+
+	for (int i = 0; i < _nrOfMsg; i++){
+		printf("Message %d : ", i + 1);
+		fgets(msg[i], msgLength, stdin);
+		msg[i][msgLength - 1] = '\0';
+	}
+
+	printf("This is your messages : \n");
+	for (int i = 0; i < _nrOfMsg; i++){
+		printf("Msg %d : %s\n", i + 1, msg[i]);
+	}
+
+	//Fill integerData
+	_validator = 1;
+	while(_validator){
+		printf("Enter number of integerData (more than 0): \n");
+		scanf("%d", _nrOfintegerData);
+		if(*_nrOfintegerData > 0) _validator = 0;
+	}
+	int * _integerData = (int *)malloc(sizeof(int) * (*_nrOfintegerData));
+	if(_integerData == NULL){
 		printf("ERROR, memory could not be allocated");
 		exit(EXIT_FAILURE);
 	}
-	printf("Enter data in integers: \n");
-	for(int i = 0; i < *_nrOfData; i++){
-		scanf("%d", &_data[i]);
+	printf("Enter integerData in integers: \n");
+	for(int i = 0; i < *_nrOfintegerData; i++){
+		scanf("%d", &_integerData[i]);
 	}
 	//TODO: CRS stuff
 
-	return _data;
+	return _integerData;
 }
 
-void goBackN(int _socket, struct sockaddr_in _server, struct Packet _header, int * _data, int _nrOfData){
+void goBackN(int _socket, struct sockaddr_in _server, struct Packet _header, int * _integerData, int _nrOfintegerData){
 	int _start = 0, _end = 0, _sentFrames = 0, _recvACK = 0;
 	int _windowsAvailable = _header.windowSize;
 	int _seqMax = (_header.windowSize * 2) + 1;
 
 	struct Packet _frame = _header;
 
-	while(!(_sentFrames == _nrOfData && _recvACK == _nrOfData)){
+	while(!(_sentFrames == _nrOfintegerData && _recvACK == _nrOfintegerData)){
 		//If there is free space in window -> send frame
-		if(_windowsAvailable > 0 && _sentFrames != _nrOfData){
+		if(_windowsAvailable > 0 && _sentFrames != _nrOfintegerData){
 			_frame.flags = 0;
 			_frame.seq = _end % _seqMax;
-			_frame.data = _data[_end];
+			_frame.integerData = _integerData[_end];
 			sendToServer(_socket, _server, _frame);
 			_windowsAvailable --;
 			_end++;
 			_sentFrames++;
-			printf("Sending frame seq %d data %d\n", _frame.seq, _frame.data);
+			printf("Sending frame seq %d integerData %d\n", _frame.seq, _frame.integerData);
 			printf("Windows available %d\n", _windowsAvailable);
 			printf("------------------------------\n");
 		}
@@ -263,11 +289,11 @@ int waitForResponse(int _socket, struct sockaddr_in _server, int _sec, int _usec
 		//recv msg -> check if correct flag and seq
 		recvFromServer(_socket, _server, &_recv);
 		if(_recv.flags == 1 && _recv.seq == _expectedSeq){ //move window to the "right"
-			printf("RECEIVED ACK: data %d, seq %d\n", _recv.data, _recv.seq);
+			printf("RECEIVED ACK: integerData %d, seq %d\n", _recv.integerData, _recv.seq);
 			return 1;
 		}
 		else{ //resend window
-			printf("RECEIVED NAK: data %d, seq %d\n", _recv.data, _recv.seq);
+			printf("RECEIVED NAK: integerData %d, seq %d\n", _recv.integerData, _recv.seq);
 			return -2;
 		}
 	}

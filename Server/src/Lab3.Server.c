@@ -17,12 +17,15 @@
 #include<netinet/in.h>
 #include <unistd.h>
 
+#define msgLength 256
+
 struct Packet{
 	int flags;  //0 = nothing, 1 = ACK, 2 = SYNC + ACK, 3 = SYNC, 4 = NAK, 5 = FIN
 	int seq;
 	int id;
 	int windowSize;
-	int data;
+	int integerData;
+	char data [msgLength];
 };
 
 struct sockaddr_in initSocket(int * _socket, int port);
@@ -93,7 +96,7 @@ struct sockaddr_in connection(int _socket, struct Packet *_handshake){
 			case 0:
 				//wait for SYNC
 				recvFromClient(_socket, &_client, _handshake);
-				printf("recv SYNC %d data %d\n", _handshake->flags, _handshake->data);
+				printf("recv SYNC %d integerData %d\n", _handshake->flags, _handshake->integerData);
 				_status++;
 				break;
 			case 1:
@@ -143,12 +146,12 @@ void goBackN(int _socket, struct sockaddr_in _client, int _seqMax){
 		recvFromClient(_socket, &_client, &_frame);
 		if(_frame.seq != _expectedSeq){
 			//Wrong seq
-			printf("SENDING NAK: Wrong seq %d (expected %d) data %d\n", _frame.seq, _expectedSeq, _frame.data);
+			printf("SENDING NAK: Wrong seq %d (expected %d) integerData %d\n", _frame.seq, _expectedSeq, _frame.integerData);
 			_frame.flags = 4;
 			sendToClient(_socket, _client, _frame);
 			printf("-----------------\n");
 		} else if(_frame.seq == _expectedSeq){
-			printf("SENDING ACK: Recv data %d, seq %d\n", _frame.data, _frame.seq);
+			printf("SENDING ACK: Recv integerData %d, seq %d\n", _frame.integerData, _frame.seq);
 			_frame.flags = 1;
 			_frame.seq = _expectedSeq;
 			sendToClient(_socket, _client, _frame);
