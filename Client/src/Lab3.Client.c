@@ -20,6 +20,7 @@
 #include <netinet/in.h>
 #include <netdb.h>
 #include <sys/select.h>
+#include <unistd.h>
 
 struct Packet{
 	int flags;
@@ -59,9 +60,9 @@ int main(int argc, char *argv[]) {
 	_data = userInteraction(&_handshake, &_nrOfData);
 
 	connection(_socket, _server, &_handshake);
-
+	printf("--------------------------------\n");
 	printf("Connected to the server\n");
-
+	printf("--------------------------------\n");
 	goBackN(_socket, _server, _handshake, _data, _nrOfData);
 
 
@@ -175,70 +176,91 @@ int * userInteraction(struct Packet *_handshake, int * _nrOfData){
 }
 
 void goBackN(int _socket, struct sockaddr_in _server, struct Packet _header, int * _data, int _nrOfData){
-	int _send = 1, _start = 0, _end = 0, _currentSeq = 0, _expectedSeq = 0;
+	int _start = 0, _end = 0; //_currentSeq = 0, _expectedSeq = 0;
 	int _windowsAvailable = _header.windowSize;
-	int _checker =0 ;
+	int _checker = 0, _sentFrames = 0, _recvACK = 0;
 	int _seqMax = (_header.windowSize * 2) + 1;
 
 	//Setup for timeouts
 	fd_set _fdSet;
 	struct timeval _timeout;
-	FD_ZERO(&_fdSet);
-	FD_SET(_socket, &_fdSet);
 
 	struct Packet _frame = _header;
-	while(_send){
+	while(!(_sentFrames == _nrOfData && _recvACK == _nrOfData)){
 		//If there is free space in window -> send frame
-		if(_windowsAvailable > 0){
+		if(_windowsAvailable > 0 && _sentFrames != _nrOfData){
 			_frame.flags = 0;
-			_frame.seq = _currentSeq % _seqMax;
+			_frame.seq = _end % _seqMax;
 			_frame.data = _data[_end];
-			printf("Sending frame seq %d data %d\n", _frame.seq, _frame.data);
 			sendToServer(_socket, _server, _frame);
 			_windowsAvailable --;
-			_currentSeq ++;
 			_end++;
+			_sentFrames++;
+			printf("Sending frame seq %d data %d\n", _frame.seq, _frame.data);
+			printf("Windows available %d\n", _windowsAvailable);
+			printf("------------------------------\n");
 		}
 
 		//Listen for ACKs briefly
 		_timeout.tv_sec = 0;
 		_timeout.tv_usec = 1;
+		FD_ZERO(&_fdSet);
+		FD_SET(_socket, &_fdSet);
 		_checker = select(FD_SETSIZE, &_fdSet, NULL, NULL, &_timeout);
 		if(_checker < 0){
 			//ERROR
 		} else if(_checker > 0){
 			recvFromServer(_socket, _server, &_frame);
-			if(_frame.flags == 1){ //move window to the "right"
+			if(_frame.flags == 1 && _frame.seq == (_start % _seqMax)){ //move window to the "right"
+				printf("RECEIVED ACK: data %d, seq %d, _start %d, _seqMax %d\n", _frame.data, _frame.seq, _start, _seqMax);
 				_start++;
 				_windowsAvailable++;
-				_expectedSeq = (_expectedSeq + 1) % _seqMax;
-			} else{ //resend window
+				_recvACK ++;
+			} else { //resend window
+				printf("RECEIVED NAK: data %d, seq %d, _start %d, _seqMax %d\n", _frame.data, _frame.seq, _start, _seqMax);
 				_end = _start;
 				_windowsAvailable = _header.windowSize;
-				_currentSeq = _expectedSeq;
+				_sentFrames -= (_end - _start) + 1;
+				_recvACK = _sentFrames;
 			}
 		}
 
 		//If _windowsAvailable is 0 then wait for 3 sec and resend if no ack is recv...
 		if(_windowsAvailable == 0){	//Wait for ACK's for 3sec then timeout -> resend window
-			_timeout.tv_sec = 3;
+			_timeout.tv_sec = 5;
 			_timeout.tv_usec = 0;
+			FD_ZERO(&_fdSet);
+			FD_SET(_socket, &_fdSet);
 			_checker = select(FD_SETSIZE, &_fdSet, NULL, NULL, &_timeout);
 			if(_checker < 0){
 				//Error
 			} else if(_checker == 0){
 				//No msg -> resend
+				printf("TIMEOUT \n");
 				_end = _start;
 				_windowsAvailable = _header.windowSize;
-				_currentSeq = _expectedSeq;
+				_sentFrames -= (_end - _start) + 1;
+				_recvACK = _sentFrames;
 			} else {
 				//recv msg -> free space in window
-				_start++;
-				_windowsAvailable++;
-				_expectedSeq = (_expectedSeq + 1) % _seqMax;
+				recvFromServer(_socket, _server, &_frame);
+				if(_frame.flags == 1 && _frame.seq == (_start % _seqMax)){ //move window to the "right"
+
+					printf("RECEIVED ACK: data %d, seq %d, _start %d, _seqMax %d\n", _frame.data, _frame.seq, _start, _seqMax);
+					_start++;
+					_windowsAvailable++;
+					_recvACK ++;
+				} else{ //resend window
+					printf("RECEIVED NAK: data %d, seq %d, _start %d, _seqMax %d\n", _frame.data, _frame.seq, _start, _seqMax);
+					_end = _start;
+					_windowsAvailable = _header.windowSize;
+					_sentFrames -= (_end - _start) + 1;
+					_recvACK = _sentFrames;
+				}
 			}
 		}
 	}
+	printf("After while in GoBackN\n");
 }
 
 

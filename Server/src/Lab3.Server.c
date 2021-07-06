@@ -49,9 +49,9 @@ int main(int argc, char *argv[]) {
 	_server = initSocket(&_socket, atoi(argv[1]));
 
 	connection(_socket, &_handshake);
-
+	printf("-----------------\n");
 	printf("Connected\n");
-
+	printf("-----------------\n");
 	goBackN(_socket, _server, (_handshake.windowSize * 2) + 1);
 	return EXIT_SUCCESS;
 }
@@ -143,15 +143,18 @@ void goBackN(int _socket, struct sockaddr_in _client, int _seqMax){
 		recvFromClient(_socket, &_client, &_frame);
 		if(_frame.seq != _expectedSeq){
 			//Wrong seq
-			printf("Wrong seq, sending NAK \n");
+			printf("SENDING NAK: Wrong seq %d (expected %d) data %d\n", _frame.seq, _expectedSeq, _frame.data);
 			_frame.flags = 4;
 			sendToClient(_socket, _client, _frame);
+			printf("-----------------\n");
 		} else if(_frame.seq == _expectedSeq){
-			printf("Data recv %d seq %d\n", _frame.data, _frame.seq);
+			printf("SENDING ACK: Recv data %d, seq %d\n", _frame.data, _frame.seq);
 			_frame.flags = 1;
+			_frame.seq = _expectedSeq;
 			sendToClient(_socket, _client, _frame);
-			_expectedSeq = _expectedSeq % _seqMax;
+			_expectedSeq = (_expectedSeq + 1) % _seqMax;
 		}
+		printf("-----------------\n");
 	}
 }
 
