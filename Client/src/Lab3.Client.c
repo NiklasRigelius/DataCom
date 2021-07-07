@@ -40,10 +40,13 @@ void recvFromServer(int _socket, struct sockaddr_in _server, struct Packet *_pac
 
 void connection(int _socket, struct sockaddr_in _server, struct Packet *_handshake);
 
-int * userInteraction(struct Packet *_handshake, int * _nrOfintegerData);
+char ** userInteraction(struct Packet *_handshake, int * _nrOfMsg);
 
-void goBackN(int _socket, struct sockaddr_in _server, struct Packet _header, int * _integerData, int _nrOfintegerData);
+void goBackN(int _socket, struct sockaddr_in _server, struct Packet _header, char ** _inputData, int _nrOfMsg);
 int waitForResponse(int _socket, struct sockaddr_in _server, int _sec, int _usec, int _expectedSeq);
+
+char ** multiDimAllocation(int _row);
+void freeMulitDim(char ** _free, int _row);
 
 int main(int argc, char *argv[]) {
 	puts("!!!Hello World 2!!!"); /* prints !!!Hello World!!! */
@@ -51,8 +54,9 @@ int main(int argc, char *argv[]) {
 	int _socket;
 	struct sockaddr_in _server;
 	struct Packet _handshake = {-1, -1, -1, -1, -1}; //JUNK values
-	int * _integerData; //TODO: make sure its cleared
-	int _nrOfintegerData = 0;
+
+	char ** _inputData; //TODO: make sure its cleared
+	int _nrOfMsg = 0;
 
 	if(argc != 3){
 	    perror("ERROR, not enough arguments\n");
@@ -61,13 +65,17 @@ int main(int argc, char *argv[]) {
 
 	_server = initSocket(&_socket, argv);
 
-	_integerData = userInteraction(&_handshake, &_nrOfintegerData);
+	_inputData = userInteraction(&_handshake, &_nrOfMsg);
 
+	printf("This is your messages : \n");
+	for (int i = 0; i < _nrOfMsg; i++){
+		printf("Message %d : %s", i + 1, _inputData[i]);
+	}
 	connection(_socket, _server, &_handshake);
 	printf("--------------------------------\n");
 	printf("Connected to the server\n");
 	printf("--------------------------------\n");
-	goBackN(_socket, _server, _handshake, _integerData, _nrOfintegerData);
+	goBackN(_socket, _server, _handshake, _inputData, _nrOfMsg );
 
 
 	return EXIT_SUCCESS;
@@ -150,7 +158,7 @@ void connection(int _socket, struct sockaddr_in _server, struct Packet *_handsha
 	}
 }
 
-int * userInteraction(struct Packet *_handshake, int * _nrOfintegerData){
+char ** userInteraction(struct Packet *_handshake, int  * _nrOfMsg){
 	int _validator = 1;
 	//Window Size
 	while(_validator){
@@ -161,60 +169,55 @@ int * userInteraction(struct Packet *_handshake, int * _nrOfintegerData){
 
 	//Enter messages
 	_validator = 1;
-	int _nrOfMsg = 0;
 	while(_validator){
 		printf("Enter number of messages to send (more than 0): \n");
-		scanf("%d", &_nrOfMsg);
-		if(_nrOfMsg > 0) _validator = 0;
+		scanf("%d", _nrOfMsg);
+		if(*_nrOfMsg > 0) _validator = 0;
 	}
-	char msg[_nrOfMsg][msgLength];
+	char ** _data = multiDimAllocation(*_nrOfMsg);
 	printf("Write your messages : \n");
-
-	for (int i = 0; i < _nrOfMsg; i++){
-		printf("Message %d : ", i + 1);
-		fgets(msg[i], msgLength, stdin);
-		msg[i][msgLength - 1] = '\0';
+	while(getchar() != '\n');
+	for (int i = 0; i < *_nrOfMsg; i++){
+		printf("Message %d index %d: ", i + 1, i);
+		fgets(_data[i], msgLength, stdin);
+		_data[i][msgLength - 1] = '\0';
 	}
 
-	printf("This is your messages : \n");
-	for (int i = 0; i < _nrOfMsg; i++){
-		printf("Msg %d : %s\n", i + 1, msg[i]);
-	}
-
-	//Fill integerData
-	_validator = 1;
-	while(_validator){
-		printf("Enter number of integerData (more than 0): \n");
-		scanf("%d", _nrOfintegerData);
-		if(*_nrOfintegerData > 0) _validator = 0;
-	}
-	int * _integerData = (int *)malloc(sizeof(int) * (*_nrOfintegerData));
-	if(_integerData == NULL){
-		printf("ERROR, memory could not be allocated");
-		exit(EXIT_FAILURE);
-	}
-	printf("Enter integerData in integers: \n");
-	for(int i = 0; i < *_nrOfintegerData; i++){
-		scanf("%d", &_integerData[i]);
-	}
+//	//Fill integerData
+//	_validator = 1;
+//	while(_validator){
+//		printf("Enter number of integerData (more than 0): \n");
+//		scanf("%d", _nrOfintegerData);
+//		if(*_nrOfintegerData > 0) _validator = 0;
+//	}
+//	int * _integerData = (int *)malloc(sizeof(int) * (*_nrOfintegerData));
+//	if(_integerData == NULL){
+//		printf("ERROR, memory could not be allocated");
+//		exit(EXIT_FAILURE);
+//	}
+//	printf("Enter integerData in integers: \n");
+//	for(int i = 0; i < *_nrOfintegerData; i++){
+//		scanf("%d", &_integerData[i]);
+//	}
 	//TODO: CRS stuff
 
-	return _integerData;
+	return _data;
 }
 
-void goBackN(int _socket, struct sockaddr_in _server, struct Packet _header, int * _integerData, int _nrOfintegerData){
+void goBackN(int _socket, struct sockaddr_in _server, struct Packet _header,char ** _inputData, int _nrOfMsg){
 	int _start = 0, _end = 0, _sentFrames = 0, _recvACK = 0;
 	int _windowsAvailable = _header.windowSize;
 	int _seqMax = (_header.windowSize * 2) + 1;
 
 	struct Packet _frame = _header;
 
-	while(!(_sentFrames == _nrOfintegerData && _recvACK == _nrOfintegerData)){
+	while(!(_sentFrames == _nrOfMsg && _recvACK == _nrOfMsg)){
 		//If there is free space in window -> send frame
-		if(_windowsAvailable > 0 && _sentFrames != _nrOfintegerData){
+		if(_windowsAvailable > 0 && _sentFrames != _nrOfMsg){
 			_frame.flags = 0;
 			_frame.seq = _end % _seqMax;
-			_frame.integerData = _integerData[_end];
+			//_frame.integerData = _integerData[_end];
+			strcpy(_frame.data, _inputData[_end]);
 			sendToServer(_socket, _server, _frame);
 			_windowsAvailable --;
 			_end++;
@@ -289,7 +292,7 @@ int waitForResponse(int _socket, struct sockaddr_in _server, int _sec, int _usec
 		//recv msg -> check if correct flag and seq
 		recvFromServer(_socket, _server, &_recv);
 		if(_recv.flags == 1 && _recv.seq == _expectedSeq){ //move window to the "right"
-			printf("RECEIVED ACK: integerData %d, seq %d\n", _recv.integerData, _recv.seq);
+			printf("RECEIVED ACK: integerData %d, seq %d msg %s\n", _recv.integerData, _recv.seq, _recv.data);
 			return 1;
 		}
 		else{ //resend window
@@ -303,7 +306,7 @@ int waitForResponse(int _socket, struct sockaddr_in _server, int _sec, int _usec
 void sendToServer(int _socket, struct sockaddr_in _server, struct Packet _packet){
 	int _checker;
 
-	_checker = sendto(_socket, (struct Packet *)&_packet, sizeof(_packet), 0, (struct sockaddr *) &_server, sizeof(_server));
+	_checker = sendto(_socket, (struct Packet *)&_packet, (1024 + sizeof(_packet)), 0, (struct sockaddr *) &_server, sizeof(_server));
 
 	if(_checker < 0){
 	    perror("ERROR, Could not send\n");
@@ -314,10 +317,26 @@ void sendToServer(int _socket, struct sockaddr_in _server, struct Packet _packet
 void recvFromServer(int _socket, struct sockaddr_in _server, struct Packet *_packet){
 	int _checker;
 	int _len = sizeof(_server);
-
-	_checker = recvfrom(_socket, (struct Packet *)_packet, sizeof(*_packet), 0, (struct sockaddr *) &_server, &_len);
+	printf("Here\n");
+	_checker = recvfrom(_socket, (struct Packet *)_packet, (sizeof(*_packet)), 0, (struct sockaddr *) &_server, &_len);
 	if(_checker < 0){
 	    perror("ERROR, Could not recv\n");
 	    exit(EXIT_FAILURE);
 	}
+}
+
+char ** multiDimAllocation(int _row){
+	char ** _retArr = (char **)malloc(_row * (sizeof(char *)));
+	for(int i = 0; i < _row; i++){
+		_retArr[i] = malloc(msgLength * (sizeof(char)));
+
+	}
+	return _retArr;
+}
+
+void freeMulitDim(char ** _free, int _row){
+	for(int i = 0; i < _row; i++){
+		free(_free[i]);
+	}
+	free(_free);
 }

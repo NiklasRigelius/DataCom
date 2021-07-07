@@ -140,21 +140,22 @@ void goBackN(int _socket, struct sockaddr_in _client, int _seqMax){
 	FD_ZERO(&_fdSet);
 	FD_SET(_socket, &_fdSet);
 
-	struct Packet _frame = {-1, -1, -1, -1, -1};  //Junk
+	struct Packet * _frame = (struct Packet*)malloc(sizeof(struct Packet));  //Junk
 	while(_send){
 		sleep(1);
-		recvFromClient(_socket, &_client, &_frame);
-		if(_frame.seq != _expectedSeq){
+		recvFromClient(_socket, &_client, _frame);
+		if(_frame->seq != _expectedSeq){
 			//Wrong seq
-			printf("SENDING NAK: Wrong seq %d (expected %d) integerData %d\n", _frame.seq, _expectedSeq, _frame.integerData);
-			_frame.flags = 4;
-			sendToClient(_socket, _client, _frame);
+			printf("SENDING NAK: Wrong seq %d (expected %d) integerData %d\n", _frame->seq, _expectedSeq, _frame->integerData);
+			_frame->flags = 4;
+			sendToClient(_socket, _client, *_frame);
 			printf("-----------------\n");
-		} else if(_frame.seq == _expectedSeq){
-			printf("SENDING ACK: Recv integerData %d, seq %d\n", _frame.integerData, _frame.seq);
-			_frame.flags = 1;
-			_frame.seq = _expectedSeq;
-			sendToClient(_socket, _client, _frame);
+		} else if(_frame->seq == _expectedSeq){
+			printf("SENDING ACK: Recv integerData %d, seq %d msg %s\n", _frame->integerData, _frame->seq, _frame->data);
+			_frame->flags = 1;
+			_frame->seq = _expectedSeq;
+			strncpy(_frame->data, "HEJ Niklas, jag heter Sven", 26);
+			sendToClient(_socket, _client, *_frame);
 			_expectedSeq = (_expectedSeq + 1) % _seqMax;
 		}
 		printf("-----------------\n");
@@ -164,7 +165,7 @@ void goBackN(int _socket, struct sockaddr_in _client, int _seqMax){
 void sendToClient(int _socket, struct sockaddr_in _client, struct Packet _packet){
 	int _checker;
 
-	_checker = sendto(_socket, (struct Packet *)&_packet, sizeof(_packet), 0, (struct sockaddr *) &_client, sizeof(_client));
+	_checker = sendto(_socket, (struct Packet *)&_packet, (1024 + sizeof(_packet)), 0, (struct sockaddr *) &_client, sizeof(_client));
 	if(_checker < 0){
 	    perror("ERROR, Could not send\n");
 	    exit(EXIT_FAILURE);
@@ -175,7 +176,7 @@ void recvFromClient(int _socket, struct sockaddr_in *_client, struct Packet *_pa
 	int _checker;
 	int _len = sizeof(*_client);
 
-	_checker = recvfrom(_socket, (struct Packet *)_packet, sizeof(*_packet), 0, (struct sockaddr *) _client, &_len);
+	_checker = recvfrom(_socket, (struct Packet *)_packet, (sizeof(*_packet)), 0, (struct sockaddr *) _client, &_len);
 	if(_checker < 0){
 	    perror("ERROR, Could not recv\n");
 	    exit(EXIT_FAILURE);
