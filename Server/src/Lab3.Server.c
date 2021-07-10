@@ -20,7 +20,7 @@
 #define msgLength 256
 
 struct Packet{
-	int flags;  //0 = nothing, 1 = ACK, 2 = SYNC + ACK, 3 = SYNC, 4 = NAK, 5 = FIN
+	int flags;  //0 = nothing, 1 = ACK, 2 = SYNC + ACK, 3 = SYNC, 4 = NAK, 5 = FIN, 6 = FIN + ACK
 	int seq;
 	int id;
 	int windowSize;
@@ -42,8 +42,10 @@ void sendFrame(int _socket, struct sockaddr_in _server, int _flag, int _id, int 
 size_t buildCRCmsg(unsigned char * _CRCmsg, struct Packet _frame);
 int calculateCRC16(unsigned char _msg [], int length );
 
+void printData(struct Packet _frame);
+void teardown(int _socket, struct sockaddr_in _client, struct Packet _frame, int _expectedSeq);
+
 int main(int argc, char *argv[]) {
-	puts("!!!Hello World!!!"); /* prints !!!Hello World!!! */
 
 	int _socket;
 	struct sockaddr_in _server;
@@ -57,16 +59,21 @@ int main(int argc, char *argv[]) {
 	_server = initSocket(&_socket, atoi(argv[1]));
 
 	printf("-------------------------------------------\n");
+	printf("-------------------------------------------\n");
 	printf("3-way handshake\n");
 	printf("-------------------------------------------\n");
 
 	connection(_socket, &_handshake);
 
 	printf("-------------------------------------------\n");
-	printf("Client connected\n");
+	printf("<< CLIENT CONNECTED >>\n");
 	printf("-------------------------------------------\n");
 
+	printf("-------------------------------------------\n");
+	printf("GO-BACK-N STARTED\n");
+	printf("-------------------------------------------\n");
 	goBackN(_socket, _server, (_handshake.windowSize * 2) + 1);
+
 	return EXIT_SUCCESS;
 }
 
@@ -172,9 +179,7 @@ struct sockaddr_in connection(int _socket, struct Packet *_handshake){
 						sleep(5);
 						_status = 1;
 					}
-
 				}
-
 				break;
 		}
 	}
@@ -184,57 +189,104 @@ struct sockaddr_in connection(int _socket, struct Packet *_handshake){
 void goBackN(int _socket, struct sockaddr_in _client, int _seqMax){
 	int _expectedSeq = 0, _send = 1;
 
+	struct Packet * _frame = (struct Packet*)malloc(sizeof(struct Packet));
+
+	while(_send){
+		sleep(1);
+		recvFromClient(_socket, &_client, _frame);
+		if(_frame->seq == _expectedSeq){ //Recv packet have the expected seq
+			//Crc check
+			if(checkCRC(*_frame) == 1){ //Recved packet is not corrupted -> send ACK
+				if(_frame->flags == 5){ //Recved FIN start teardown process and return
+					printf("GO-BACK-N ENDED\n");
+					teardown(_socket, _client, *_frame, _expectedSeq);
+					_send = 0;
+					return;
+				} else {
+					printf("[RECEIVED - VALID]\n");
+					printData(*_frame);
+					sendFrame(_socket, _client, 3, _frame->id, _expectedSeq, _frame->windowSize, _frame->data);
+					_expectedSeq = (_expectedSeq + 1) % _seqMax;
+				}
+
+			}
+			else { //Recved packet is corrupted -> send NAK
+				printf("[RECEIVED - CORRUPTED]\n");
+				printData(*_frame);
+				sendFrame(_socket, _client, 4, _frame->id, _frame->seq, _frame->windowSize, _frame->data);
+			}
+		} else if(_frame->seq < _expectedSeq){ //Recved packet is a duplicate -> Discard
+			printf("[RECEIVED - DUPLICATE]\n");
+			printData(*_frame);
+		} else{	//Recved packet has wrong sequence -> Send NAK
+					printf("[RECEIVED - WRONG SEQUENCE]\n");
+					printData(*_frame);
+					sendFrame(_socket, _client, 4, _frame->id, _frame->seq, _frame->windowSize, _frame->data);
+		}
+	}
+
+}
+
+void teardown(int _socket, struct sockaddr_in _client, struct Packet _frame, int _expectedSeq){
+	int  _status = 0;
+
+	printf("-------------------------------------------\n");
+	printf("TEARDOWN STARTED\n");
+	printf("-------------------------------------------\n");
+
 	//Setup for timeouts
 	fd_set _fdSet;
 	struct timeval _timeout;
 	FD_ZERO(&_fdSet);
 	FD_SET(_socket, &_fdSet);
 
-	struct Packet * _frame = (struct Packet*)malloc(sizeof(struct Packet));
-
-	while(_send){
-		sleep(1);
-		recvFromClient(_socket, &_client, _frame);
-		if(_frame->seq != _expectedSeq){
-			//Wrong seq -> send NAK
-			printf("[RECEIVED - WRONG SEQUENCE]\n");
-			printf("Flag            : %d\n", _frame->flags);
-			printf("ID              : %d\n", _frame->id);
-			printf("Sequence number : %d\n", _frame->seq);
-			printf("Window size     : %d\n", _frame->windowSize);
-			printf("Crc             : %d\n", _frame->crc);
-			printf("Data            : %s\n", _frame->data);
+	printf("[RECEIVED - FIN]\n");
+	printData(_frame);
+	//send FIN + ACK
+	sendFrame(_socket, _client, 6, _frame.id, _expectedSeq, _frame.windowSize, _frame.data);
+	//wait for FIN + ACK -> timeout
+	FD_ZERO(&_fdSet);
+	FD_SET(_socket, &_fdSet);
+	_timeout.tv_sec = 5;
+	_timeout.tv_usec = 0;
+	int _checker = select(FD_SETSIZE, &_fdSet, NULL, NULL, &_timeout);
+	if(_checker <= 0){
+		printf("[TIMEOUT] \n");
+		printf("Reason          : No FIN + ACK received\n");
+		printf("<< Disconnecting... >>\n");
+		printf("-------------------------------------------\n");
+		_status = 1;
+	} else {
+		recvFromClient(_socket, &_client, &_frame);
+		if(checkCRC(_frame) == 1 && _frame.seq == 6){
+			printf("[RECEIVED - FIN + ACK]\n");
+			printf("Flag            : %d\n", _frame.flags);
+			printf("Sequence number : %d\n", _frame.seq);
+			printf("Crc             : %d\n", _frame.crc);
 			printf("-------------------------------------------\n");
-			sendFrame(_socket, _client, 4, _frame->id, _frame->seq, _frame->windowSize, _frame->data);
-		} else if(_frame->seq == _expectedSeq){
-			//Crc check
-			if(checkCRC(*_frame) == 1){ //Not corrupted -> send ACK
-				printf("[RECEIVED - VALID]\n");
-				printf("Flag            : %d\n", _frame->flags);
-				printf("ID              : %d\n", _frame->id);
-				printf("Sequence number : %d\n", _frame->seq);
-				printf("Window size     : %d\n", _frame->windowSize);
-				printf("Crc             : %d\n", _frame->crc);
-				printf("Data            : %s\n", _frame->data);
-				printf("-------------------------------------------\n");
-				sendFrame(_socket, _client, 3, _frame->id, _expectedSeq, _frame->windowSize, _frame->data);
-				_expectedSeq = (_expectedSeq + 1) % _seqMax;
-			}
-			else { //Corrupted -> send NAK
-				//TODO: Should corurpted packets be NAKed or just discarded?
-				printf("[RECEIVED - CORRUPTED]\n");
-				printf("Flag            : %d\n", _frame->flags);
-				printf("ID              : %d\n", _frame->id);
-				printf("Sequence number : %d\n", _frame->seq);
-				printf("Window size     : %d\n", _frame->windowSize);
-				printf("Crc             : %d\n", _frame->crc);
-				printf("Data            : %s\n", _frame->data);
-				printf("-------------------------------------------\n");
-				sendFrame(_socket, _client, 4, _frame->id, _frame->seq, _frame->windowSize, _frame->data);
-
-			}
 		}
 	}
+	//disconnect
+
+	printf("TEARDOWN ENDED\n");
+	printf("-------------------------------------------\n");
+	printf("-------------------------------------------\n");
+	close(_socket);
+	printf("<< SOCKET HAS BEEN CLOSED >>\n");
+	printf("-------------------------------------------\n");
+	printf("-------------------------------------------\n");
+
+
+}
+
+void printData(struct Packet _frame){
+	printf("Flag            : %d\n", _frame.flags);
+	printf("ID              : %d\n", _frame.id);
+	printf("Sequence number : %d\n", _frame.seq);
+	printf("Window size     : %d\n", _frame.windowSize);
+	printf("Crc             : %d\n", _frame.crc);
+	printf("Data            : %s\n", _frame.data);
+	printf("-------------------------------------------\n");
 }
 
 void sendFrame(int _socket, struct sockaddr_in _server, int _flag, int _id, int _seq, int _windowSize, char * _msg){
@@ -275,13 +327,7 @@ void sendFrame(int _socket, struct sockaddr_in _server, int _flag, int _id, int 
 			break;
 	}
 	printf("[SENDING - %s] \n", _type);
-	printf("Flag            : %d\n", _frame.flags);
-	printf("ID              : %d\n", _frame.id);
-	printf("Sequence number : %d\n", _frame.seq);
-	printf("Window size     : %d\n", _frame.windowSize);
-	printf("Crc             : %d\n", _frame.crc);
-	printf("Data            : %s\n", _frame.data);
-	printf("-------------------------------------------\n");
+	printData(_frame);
 
 	sendToClient(_socket, _server, _frame);
 }

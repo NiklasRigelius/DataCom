@@ -26,7 +26,7 @@
 #define msgLength 256
 
 struct Packet{
-	int flags;
+	int flags;	//0 = nothing, 1 = ACK, 2 = SYNC + ACK, 3 = SYNC, 4 = NAK, 5 = FIN, 6 = FIN + ACK
 	int seq;
 	int id;
 	int windowSize;
@@ -43,7 +43,7 @@ void connection(int _socket, struct sockaddr_in _server, struct Packet *_handsha
 
 char ** userInteraction(struct Packet *_handshake, int * _nrOfMsg);
 
-void goBackN(int _socket, struct sockaddr_in _server, struct Packet _header, char ** _inputData, int _nrOfMsg);
+int goBackN(int _socket, struct sockaddr_in _server, struct Packet _header, char ** _inputData, int _nrOfMsg);
 int waitForResponse(int _socket, struct sockaddr_in _server, int _sec, int _usec, int _expectedSeq);
 
 char ** multiDimAllocation(int _row);
@@ -54,8 +54,11 @@ void sendFrame(int _socket, struct sockaddr_in _server, int _flag, int _id, int 
 size_t buildCRCmsg(unsigned char * _CRCmsg, struct Packet _frame);
 int calculateCRC16(unsigned char _msg [], int length );
 
+void printData(struct Packet _frame, int _type);
+
+void teardown(int _socket, struct sockaddr_in _server, struct Packet _handshake, int _seq);
+
 int main(int argc, char *argv[]) {
-	puts("!!!Hello World 2!!!"); /* prints !!!Hello World!!! */
 
 	int _socket;
 	struct sockaddr_in _server;
@@ -72,23 +75,42 @@ int main(int argc, char *argv[]) {
 	_server = initSocket(&_socket, argv);
 
 	printf("-------------------------------------------\n");
-	printf("User interaction\n");
+	printf("-------------------------------------------\n");
+	printf("USER INTERACTION\n");
 	printf("-------------------------------------------\n");
 
 
 	_inputData = userInteraction(&_handshake, &_nrOfMsg);
 
 	printf("-------------------------------------------\n");
-	printf("3-way handshake\n");
+	printf("-------------------------------------------\n");
+	printf("3-WAY HANDSHAKE\n");
 	printf("-------------------------------------------\n");
 
 	connection(_socket, _server, &_handshake);
 
 	printf("-------------------------------------------\n");
-	printf("Connected to the server\n");
+	printf("<< CONNECTED TO SERVER >>\n");
 	printf("-------------------------------------------\n");
 
-	goBackN(_socket, _server, _handshake, _inputData, _nrOfMsg );
+	printf("-------------------------------------------\n");
+	printf("GO-BACK-N STARTED\n");
+	printf("-------------------------------------------\n");
+	int _seq = goBackN(_socket, _server, _handshake, _inputData, _nrOfMsg );
+	printf("<< GO-BACK-N ENDED >>\n");
+	printf("-------------------------------------------\n");
+
+	printf("-------------------------------------------\n");
+	printf("TEARDOWN STARTED \n");
+	printf("-------------------------------------------\n");
+	teardown(_socket, _server, _handshake, _seq);
+	printf("TEARDOWN ENDED \n");
+	printf("-------------------------------------------\n");
+	printf("-------------------------------------------\n");
+	close(_socket);
+	printf("<< SOCKET HAS BEEN CLOSED >>\n");
+	printf("-------------------------------------------\n");
+	printf("-------------------------------------------\n");
 
 	freeMultiDim(_inputData, _nrOfMsg);
 	return EXIT_SUCCESS;
@@ -121,7 +143,6 @@ struct sockaddr_in initSocket(int *_socket, char * argv[]){
 }
 
 void connection(int _socket, struct sockaddr_in _server, struct Packet *_handshake){
-	//TODO: remove : 0 = nothing, 1 = ACK, 2 = SYNC + ACK, 3 = SYNC, 4 = NAK, 5 = FIN
 	//Setup for timeouts
 	fd_set _fdSet;
 	struct timeval _timeout;
@@ -143,10 +164,7 @@ void connection(int _socket, struct sockaddr_in _server, struct Packet *_handsha
 				_CRCmsgSize = buildCRCmsg((unsigned char *)&_CRCmsg, *_handshake);
 				_handshake->crc = calculateCRC16(_CRCmsg, _CRCmsgSize);
 				printf("[SENDING - SYNC]\n");
-				printf("Flag            : %d\n", _handshake->flags);
-				printf("Sequence number : %d\n", _handshake->seq);
-				printf("Crc             : %d\n", _handshake->crc);
-				printf("-------------------------------------------\n");
+				printData(*_handshake, 1);
 				sendToServer(_socket, _server, *_handshake);
 
 				_status++;
@@ -168,19 +186,12 @@ void connection(int _socket, struct sockaddr_in _server, struct Packet *_handsha
 					recvFromServer(_socket, _server, _handshake);
 					if(checkCRC(*_handshake) == 1){
 						printf("[RECEIVED - SYNC + ACK]\n");
-						printf("Flag            : %d\n", _handshake->flags);
-						printf("Sequence number : %d\n", _handshake->seq);
-						printf("Crc             : %d\n", _handshake->crc);
+						printData(*_handshake, 1);
 
-						printf("-------------------------------------------\n");
 						_status ++;
 					}else {
 						printf("[RECEIVED - CORRUPTED]\n");
-						printf("Flag            : %d\n", _handshake->flags);
-						printf("Sequence number : %d\n", _handshake->seq);
-						printf("Crc             : %d\n", _handshake->crc);
-
-						printf("-------------------------------------------\n");
+						printData(*_handshake, 1);
 						_status = 0;
 					}
 				}
@@ -192,10 +203,7 @@ void connection(int _socket, struct sockaddr_in _server, struct Packet *_handsha
 				_CRCmsgSize = buildCRCmsg((unsigned char *)&_CRCmsg, *_handshake);
 				_handshake->crc = calculateCRC16(_CRCmsg, _CRCmsgSize);
 				printf("[SENDING - ACK]\n");
-				printf("Flag            : %d\n", _handshake->flags);
-				printf("Sequence number : %d\n", _handshake->seq);
-				printf("Crc             : %d\n", _handshake->crc);
-				printf("-------------------------------------------\n");
+				printData(*_handshake, 1);
 
 				sendToServer(_socket, _server, *_handshake);
 				_status++;
@@ -203,6 +211,86 @@ void connection(int _socket, struct sockaddr_in _server, struct Packet *_handsha
 				break;
 		}
 	}
+}
+
+void teardown(int _socket, struct sockaddr_in _server, struct Packet _handshake, int _seq){
+	int _active = 1, _status = 0, _nrOfTimeouts = 0;
+	int _seqMax = (_handshake.windowSize * 2) + 1;
+	//Setup for timeouts
+	fd_set _fdSet;
+	struct timeval _timeout;
+	FD_ZERO(&_fdSet);
+	FD_SET(_socket, &_fdSet);
+
+	unsigned char _CRCmsg [sizeof(struct Packet)];
+	size_t _CRCmsgSize;
+
+	while(_active){
+		switch(_status){
+		case 0:
+			//sending FIN
+			_handshake.flags = 5;
+			_handshake.seq = _seq;
+			_CRCmsgSize = buildCRCmsg((unsigned char *)&_CRCmsg, _handshake);
+			_handshake.crc = calculateCRC16(_CRCmsg, _CRCmsgSize);
+			printf("[SENDING - FIN]\n");
+			printData(_handshake, 1);
+			sendToServer(_socket, _server, _handshake);
+
+			_status++;
+			break;
+		case 1:
+			//waiting for FIN + ACK, n number of times timeouts
+			//Timer - 1 sec
+			FD_ZERO(&_fdSet);
+			FD_SET(_socket, &_fdSet);
+			_timeout.tv_sec = 1;
+			_timeout.tv_usec = 0;
+
+			int _checker = select(FD_SETSIZE, &_fdSet, NULL, NULL, &_timeout);
+			//TODO: handle error here _checker < 0
+			if(_checker <= 0){
+				printf("[TIMEOUT] \n");
+				printf("Reason          : No FIN + ACK received\n");
+				_nrOfTimeouts++;
+				_status  =0;
+				if(_nrOfTimeouts > 10){ //Make it possible to resend FIN 10 times with a timeout time of 1 sec
+					printf("<< Number of max timeouts reached, disconnecting... >>\n");
+					_status = 2;
+				}
+				printf("-------------------------------------------\n");
+			} else {
+				recvFromServer(_socket, _server, &_handshake);
+				if(checkCRC(_handshake) == 1 && _handshake.flags == 6){
+					printf("[RECEIVED - FIN + ACK]\n");
+					printData(_handshake, 1);
+
+					_status ++;
+				}else {
+					printf("[RECEIVED - INVALID]\n");
+					printData(_handshake, 1);
+					_status = 0;
+				}
+			}
+
+			break;
+		case 2:
+			//send FIN + ACK, disconnect
+			//Send SYNC
+			_handshake.flags = 6;
+			_handshake.seq = (_seq + 1) % _seqMax;
+			_CRCmsgSize = buildCRCmsg((unsigned char *)&_CRCmsg, _handshake);
+			_handshake.crc = calculateCRC16(_CRCmsg, _CRCmsgSize);
+			printf("[SENDING - FIN + ACK]\n");
+			printData(_handshake, 1);
+
+			sendToServer(_socket, _server, _handshake);
+			_status++;
+			_active = 0;
+			break;
+		}
+	}
+
 }
 
 char ** userInteraction(struct Packet *_handshake, int  * _nrOfMsg){
@@ -235,7 +323,7 @@ char ** userInteraction(struct Packet *_handshake, int  * _nrOfMsg){
 	return _data;
 }
 
-void goBackN(int _socket, struct sockaddr_in _server, struct Packet _header,char ** _inputData, int _nrOfMsg){
+int goBackN(int _socket, struct sockaddr_in _server, struct Packet _header,char ** _inputData, int _nrOfMsg){
 	int _start = 0, _end = 0, _sentFrames = 0, _recvACK = 0;
 	int _windowsAvailable = _header.windowSize;
 	int _seqMax = (_header.windowSize * 2) + 1;
@@ -287,7 +375,7 @@ void goBackN(int _socket, struct sockaddr_in _server, struct Packet _header,char
 			}
 		}
 	}
-	printf("After while in GoBackN\n");
+	return (_end % _seqMax); //next sequence to be sent
 }
 //returns 1 if ACK is recv
 //returns -1 if timer is triggered
@@ -323,37 +411,17 @@ int waitForResponse(int _socket, struct sockaddr_in _server, int _sec, int _usec
 		if(_recv.flags == 3 && _recv.seq == _expectedSeq){ //move window to the "right"
 			if(checkCRC(_recv) == 1){ //Packet not corrupted -> return 1
 				printf("[RECEIVED - VALID]\n");
-				printf("Flag            : %d\n", _recv.flags);
-				printf("ID              : %d\n", _recv.id);
-				printf("Sequence number : %d\n", _recv.seq);
-				printf("Window size     : %d\n", _recv.windowSize);
-				printf("Crc             : %d\n", _recv.crc);
-				printf("Data            : %s\n", _recv.data);
-
-				printf("-------------------------------------------\n");
+				printData(_recv, 2);
 				return 1;
 			} else{ //Packet corrupted -> return -3;
 				printf("[RECEIVED - CORRUPTED]\n");
-				printf("Flag            : %d\n", _recv.flags);
-				printf("ID              : %d\n", _recv.id);
-				printf("Sequence number : %d\n", _recv.seq);
-				printf("Window size     : %d\n", _recv.windowSize);
-				printf("Crc             : %d\n", _recv.crc);
-				printf("Data            : %s\n", _recv.data);
-				printf("-------------------------------------------\n");
+				printData(_recv, 2);
 				return -3;
 			}
-
 		}
 		else{ //resend window
 			printf("[RECEIVED - NAK]\n");
-			printf("Flag            : %d\n", _recv.flags);
-			printf("ID              : %d\n", _recv.id);
-			printf("Sequence number : %d\n", _recv.seq);
-			printf("Window size     : %d\n", _recv.windowSize);
-			printf("Crc             : %d\n", _recv.crc);
-			printf("Data            : %s\n", _recv.data);
-			printf("-------------------------------------------\n");
+			printData(_recv, 2);
 			return -2;
 		}
 	}
@@ -380,6 +448,24 @@ void recvFromServer(int _socket, struct sockaddr_in _server, struct Packet *_pac
 	    perror("ERROR, Could not recv\n");
 	    exit(EXIT_FAILURE);
 	}
+}
+
+void printData(struct Packet _frame, int _type){
+	if(_type == 1) { //Handshake
+		printf("Flag            : %d\n", _frame.flags);
+		printf("Sequence number : %d\n", _frame.seq);
+		printf("Crc             : %d\n", _frame.crc);
+	}
+	else if(_type == 2){ // Sliding window
+		printf("Flag            : %d\n", _frame.flags);
+		printf("ID              : %d\n", _frame.id);
+		printf("Sequence number : %d\n", _frame.seq);
+		printf("Window size     : %d\n", _frame.windowSize);
+		printf("Crc             : %d\n", _frame.crc);
+		printf("Data            : %s\n", _frame.data);
+	}
+
+	printf("-------------------------------------------\n");
 }
 
 int checkCRC(struct Packet _frame){
