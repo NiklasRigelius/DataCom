@@ -218,9 +218,11 @@ void goBackN(int _socket, struct sockaddr_in _client, int _seqMax){
 		} else if(_frame->seq < _expectedSeq){ //Recved packet is a duplicate -> Discard
 			printf("[RECEIVED - DUPLICATE]\n");
 			printData(*_frame);
+			sendFrame(_socket, _client, 3, _frame->id, _frame->seq, _frame->windowSize, _frame->data);
 		} else{	//Recved packet has wrong sequence -> Send NAK
 					printf("[RECEIVED - WRONG SEQUENCE]\n");
 					printData(*_frame);
+					strcpy(_frame->data, "WRONG SEQUENCEEEE");
 					sendFrame(_socket, _client, 4, _frame->id, _frame->seq, _frame->windowSize, _frame->data);
 		}
 	}
@@ -308,13 +310,13 @@ void sendFrame(int _socket, struct sockaddr_in _server, int _flag, int _id, int 
 			strcpy(_type, "FRAME");
 			break;
 		case 1:
-			strcpy(_type, "ACK");
+			strcpy(_type, "SYNC");
 			break;
 		case 2:
 			strcpy(_type, "SYNC + ACK");
 			break;
 		case 3:
-			strcpy(_type, "SYNC");
+			strcpy(_type, "ACK");
 			break;
 		case 4:
 			strcpy(_type, "NAK");

@@ -21,6 +21,7 @@
 #include <netdb.h>
 #include <sys/select.h>
 #include <unistd.h>
+#include <time.h>
 
 
 #define msgLength 256
@@ -57,6 +58,8 @@ int calculateCRC16(unsigned char _msg [], int length );
 void printData(struct Packet _frame, int _type);
 
 void teardown(int _socket, struct sockaddr_in _server, struct Packet _handshake, int _seq);
+
+void corruptionGenerator(struct Packet * _packet);
 
 int main(int argc, char *argv[]) {
 
@@ -329,10 +332,12 @@ int goBackN(int _socket, struct sockaddr_in _server, struct Packet _header,char 
 	int _seqMax = (_header.windowSize * 2) + 1;
 
 	struct Packet _frame = _header;
+//TODO: if NAK recv has seq bigger than expected = discard
 
 
 	while(!(_sentFrames == _nrOfMsg && _recvACK == _nrOfMsg)){
 		//If there is free space in window -> send frame
+		//printf("!!!!!!!!sent frames %d, _recvACK %d !!!!!!!\n", _sentFrames, _recvACK);
 		if(_windowsAvailable > 0 && _sentFrames != _nrOfMsg){
 			sendFrame(_socket, _server, 0, _header.id, (_end % _seqMax), _header.windowSize, _inputData[_end]);
 			_windowsAvailable --; 	//One frame is "on the move", there is one less window available
@@ -350,13 +355,13 @@ int goBackN(int _socket, struct sockaddr_in _server, struct Packet _header,char 
 			_windowsAvailable++;	//Open up a slot for data to be sent
 			_recvACK ++;			//count the recv ACKs
 		}
-		else if(_recvStatus == -2 || _recvStatus == -3){ //recv an NAK or corrupted packet TODO: Check if a corrupted packet should lead to windows being resent
+		else if(_recvStatus == -2 || _recvStatus == -3){ //recv an NAK or corrupted packet
+			_sentFrames -= (_end - _start);
 			_end = _start;			//reset _end to point to the start of the window -> will make sure the window is resent
 			_windowsAvailable = _header.windowSize;	//Make all slots in window available
-			_sentFrames -= (_end - _start) + 1;		//Subtract subtract _sentFrames with the number of frames needed to be resent
-			_recvACK = _sentFrames;					//Subtract subtract _recvAck with the number of frames needed to be resent
+			//Subtract subtract _sentFrames with the number of frames needed to be resent
+			//_recvACK = _sentFrames;
 		}
-
 		//If there is no windows available we need to wait for ACK, NAK or timeout
 		//Timer is set to 5 sec, if no response from server is available we resend the packets
 		//We are therefore interested in if the timer is triggered
@@ -368,13 +373,14 @@ int goBackN(int _socket, struct sockaddr_in _server, struct Packet _header,char 
 				_recvACK ++;
 			}
 			else if(_recvStatus == -1 ||_recvStatus == -2 || _recvStatus == -3){ //if timer is triggered or NAK was received
+				_sentFrames -= (_end - _start);
 				_end = _start;
 				_windowsAvailable = _header.windowSize;
-				_sentFrames -= (_end - _start) + 1;
-				_recvACK = _sentFrames;
+				//_recvACK = _sentFrames;
 			}
 		}
 	}
+
 	return (_end % _seqMax); //next sequence to be sent
 }
 //returns 1 if ACK is recv
@@ -407,7 +413,9 @@ int waitForResponse(int _socket, struct sockaddr_in _server, int _sec, int _usec
 	}
 	else {
 		//recv msg -> check if correct flag and seq
+		printf("[EXPECTED SEQ] - %d\n", _expectedSeq);
 		recvFromServer(_socket, _server, &_recv);
+		printf("[seq recv %d]\n", _recv.seq);
 		if(_recv.flags == 3 && _recv.seq == _expectedSeq){ //move window to the "right"
 			if(checkCRC(_recv) == 1){ //Packet not corrupted -> return 1
 				printf("[RECEIVED - VALID]\n");
@@ -418,6 +426,10 @@ int waitForResponse(int _socket, struct sockaddr_in _server, int _sec, int _usec
 				printData(_recv, 2);
 				return -3;
 			}
+		} else if(_recv.flags == 4 && _recv.seq != _expectedSeq){
+			printf("[RECEIVED - NAK FOR UNEXPECTED SEQ]\n");
+			printData(_recv, 2);
+			return 0;
 		}
 		else{ //resend window
 			printf("[RECEIVED - NAK]\n");
@@ -428,8 +440,18 @@ int waitForResponse(int _socket, struct sockaddr_in _server, int _sec, int _usec
 	return -1;
 }
 
+void corruptionGenerator(struct Packet * _packet){
+	srand(time(NULL));
+	int _generated = (rand() % 100) + 1; //rand() % 100 = range [0, 99], by adding 1 we get range [1, 100]
+	if(_generated > 75  && _generated <= 100) { //20 % chance for corruption
+		strcpy(_packet->data, "CORRUPTED FRAME");
+	}
+}
+
 void sendToServer(int _socket, struct sockaddr_in _server, struct Packet _packet){
 	int _checker;
+
+	corruptionGenerator(&_packet); //20 % of generating a corupted packet
 
 	_checker = sendto(_socket, (struct Packet *)&_packet, (1024 + sizeof(_packet)), 0, (struct sockaddr *) &_server, sizeof(_server));
 
