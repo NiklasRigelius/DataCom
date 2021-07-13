@@ -188,6 +188,9 @@ struct sockaddr_in connection(int _socket, struct Packet *_handshake){
 
 void goBackN(int _socket, struct sockaddr_in _client, int _seqMax){
 	int _expectedSeq = 0, _send = 1;
+	int _recvACK [_seqMax];
+	memset(_recvACK, 0, sizeof(_recvACK)); //set all elements to 0
+	int _nrOfACKs = 0;
 
 	struct Packet * _frame = (struct Packet*)malloc(sizeof(struct Packet));
 
@@ -206,6 +209,18 @@ void goBackN(int _socket, struct sockaddr_in _client, int _seqMax){
 					printf("[RECEIVED - VALID]\n");
 					printData(*_frame);
 					sendFrame(_socket, _client, 3, _frame->id, _expectedSeq, _frame->windowSize, _frame->data);
+					//Keep track of recv ACK to find duplicates
+					_recvACK[_expectedSeq] = 1;
+					_nrOfACKs++;
+					if(_nrOfACKs == 3){
+						_nrOfACKs--;
+						if(_expectedSeq == 0) _recvACK [_seqMax - 2] = 0;
+						else if(_expectedSeq == 1) _recvACK [_seqMax - 1] = 0;
+						else {
+							_recvACK[_expectedSeq - 2] = 0;
+						}
+					}
+					//
 					_expectedSeq = (_expectedSeq + 1) % _seqMax;
 				}
 
@@ -215,11 +230,12 @@ void goBackN(int _socket, struct sockaddr_in _client, int _seqMax){
 				printData(*_frame);
 				sendFrame(_socket, _client, 4, _frame->id, _frame->seq, _frame->windowSize, _frame->data);
 			}
-		} else if(_frame->seq < _expectedSeq){ //Recved packet is a duplicate -> Discard
+		} else if(_recvACK[_frame->seq] == 1){ //Recved packet is a duplicate -> Discard
 			printf("[RECEIVED - DUPLICATE]\n");
 			printData(*_frame);
 			sendFrame(_socket, _client, 3, _frame->id, _frame->seq, _frame->windowSize, _frame->data);
 		} else{	//Recved packet has wrong sequence -> Send NAK
+
 					printf("[RECEIVED - WRONG SEQUENCE]\n");
 					printData(*_frame);
 					strcpy(_frame->data, "WRONG SEQUENCEEEE");
