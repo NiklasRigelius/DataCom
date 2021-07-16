@@ -28,6 +28,7 @@ struct Packet{
 	int windowSize;
 	int crc;
 	char data [msgLength];
+	time_t timestamp;
 };
 
 //Function Declaration - Sorted by return type
@@ -115,7 +116,7 @@ void goBackN(int _socket, struct sockaddr_in _client, int _seqMax){
 					return;
 				} else {
 					printf("[RECEIVED - VALID]\n");
-					printData(*_frame, 2);
+					printData(*_frame, 3);
 					sendFrame(_socket, _client, 3, _frame->id, _expectedSeq, _frame->windowSize, _frame->data);
 					//Keep track of recv ACK to find duplicates
 					_recvACK[_expectedSeq] = 1;
@@ -128,29 +129,26 @@ void goBackN(int _socket, struct sockaddr_in _client, int _seqMax){
 							_recvACK[_expectedSeq - 2] = 0;
 						}
 					}
-					//
-					_expectedSeq = (_expectedSeq + 1) % _seqMax;
+					_expectedSeq = (_expectedSeq + 1) % _seqMax; //Set new expected seq
 				}
-
 			}
 			else { //Recved packet is corrupted -> send NAK
 				printf("[RECEIVED - CORRUPTED]\n");
-				printData(*_frame, 2);
+				printData(*_frame, 3);
 				sendFrame(_socket, _client, 4, _frame->id, _frame->seq, _frame->windowSize, _frame->data);
 			}
 		} else if(_recvACK[_frame->seq] == 1){ //Recved packet is a duplicate -> Discard
 			printf("[RECEIVED - DUPLICATE]\n");
-			printData(*_frame, 2);
+			printData(*_frame, 3);
 			sendFrame(_socket, _client, 3, _frame->id, _frame->seq, _frame->windowSize, _frame->data);
-		} else{	//Recved packet has wrong sequence -> Send NAK
-
-					printf("[RECEIVED - WRONG SEQUENCE]\n");
-					printData(*_frame, 2);
-					strcpy(_frame->data, "WRONG SEQUENCEEEE");
-					sendFrame(_socket, _client, 4, _frame->id, _frame->seq, _frame->windowSize, _frame->data);
+		} else {	//Recved packet has wrong sequence -> Send NAK
+			printf("[RECEIVED - WRONG SEQUENCE]\n");
+			printData(*_frame, 3);
+			strcpy(_frame->data, "WRONG SEQUENCEEEE");
+			sendFrame(_socket, _client, 4, _frame->id, _frame->seq, _frame->windowSize, _frame->data);
 		}
 	}
-
+	free(_frame);
 }
 void printData(struct Packet _frame, int _type){
 
@@ -158,13 +156,25 @@ void printData(struct Packet _frame, int _type){
 		printf("Flag            : %d\n", _frame.flags);
 		printf("Sequence number : %d\n", _frame.seq);
 		printf("Crc             : %d\n", _frame.crc);
-	}else{
+	} else if(_type == 2){
 		printf("Flag            : %d\n", _frame.flags);
 		printf("ID              : %d\n", _frame.id);
 		printf("Sequence number : %d\n", _frame.seq);
 		printf("Window size     : %d\n", _frame.windowSize);
 		printf("Crc             : %d\n", _frame.crc);
-		printf("Data            : %s\n", _frame.data);
+		printf("Data            : %s", _frame.data);
+		printf("Time sent       : %s", ctime(&_frame.timestamp));
+	} else{
+		time_t _time = time(&_time);
+		printf("Flag            : %d\n", _frame.flags);
+		printf("ID              : %d\n", _frame.id);
+		printf("Sequence number : %d\n", _frame.seq);
+		printf("Window size     : %d\n", _frame.windowSize);
+		printf("Crc             : %d\n", _frame.crc);
+		printf("Data            : %s", _frame.data);
+		printf("Time sent       : %s", ctime(&_frame.timestamp));
+		printf("Time received   : %s", ctime(&_time));
+
 	}
 
 	printf("-------------------------------------------\n");
@@ -187,9 +197,13 @@ void sendFrame(int _socket, struct sockaddr_in _server, int _flag, int _id, int 
 	_frame.windowSize = _windowSize;
 	strcpy(_frame.data, _msg);
 
+	//set crc
 	unsigned char _CRCmsg [sizeof(struct Packet)];
 	size_t _CRCmsgSize = buildCRCmsg((unsigned char *)&_CRCmsg, _frame);
 	_frame.crc = calculateCRC16(_CRCmsg, _CRCmsgSize);
+
+	//time stamps
+	_frame.timestamp = time(&_frame.timestamp);
 
 	//Printing what is being sent
 	char _type [20];
@@ -209,25 +223,11 @@ void sendFrame(int _socket, struct sockaddr_in _server, int _flag, int _id, int 
 		case 4:
 			strcpy(_type, "NAK");
 			break;
-		case 5:
-			strcpy(_type, "FIN");
-			break;
-		case 6:
-			strcpy(_type, "FIN + ACK");
-			break;
 	}
 	printf("[SENDING - %s] \n", _type);
 	printData(_frame, 2);
 
 	corruptionGenerator(&_frame);
-
-	//TODO: remove
-	//generate duplicate
-	srand(time(NULL));
-	int _generated = (rand() % 100) + 1; //rand() % 100 = range [0, 99], by adding 1 we get range [1, 100]
-	if(_generated > 50  && _generated <= 100) { //20 % chance for corruption
-		sendToClient(_socket, _server, _frame);
-	}
 
 	sendToClient(_socket, _server, _frame);
 }
@@ -256,14 +256,20 @@ void teardown(int _socket, struct sockaddr_in _client, struct Packet _frame, int
 	printf("[RECEIVED - FIN]\n");
 	printData(_frame, 1);
 	//send FIN + ACK
-	sendFrame(_socket, _client, 6, _frame.id, _expectedSeq, _frame.windowSize, _frame.data);
+	printf("[RECEIVED - FIN + ACK]\n");
+	_frame.flags = 6;
+	printData(_frame, 1);
+	sendToClient(_socket, _client, _frame);
 	//wait for FIN + ACK -> timeout
 	FD_ZERO(&_fdSet);
 	FD_SET(_socket, &_fdSet);
 	_timeout.tv_sec = 5;
 	_timeout.tv_usec = 0;
 	int _checker = select(FD_SETSIZE, &_fdSet, NULL, NULL, &_timeout);
-	if(_checker <= 0){
+	if(_checker < 0){
+	    perror("ERROR, select returned < 0\n");
+	    exit(EXIT_FAILURE);
+	} else if(_checker == 0){
 		printf("[TIMEOUT] \n");
 		printf("Reason          : No FIN + ACK received\n");
 		printf("<< Disconnecting... >>\n");
@@ -322,7 +328,6 @@ struct sockaddr_in connection(int _socket, struct Packet *_handshake){
 	FD_ZERO(&_fdSet);
 	FD_SET(_socket, &_fdSet);
 
-	//TODO: remove : 0 = nothing, 1 = SYNC, 2 = SYNC + ACK, 3 = ACK, 4 = NAK, 5 = FIN
 	while(_active){
 		switch (_status){
 			case 0:
@@ -334,14 +339,13 @@ struct sockaddr_in connection(int _socket, struct Packet *_handshake){
 				//Send SYNC + ACK
 				if(checkCRC(*_handshake) == 1 && _handshake->seq == 0){
 					printf("[RECEIVED - SYNC]\n");
-					printData(*_handshake, 2);
+					printData(*_handshake, 1);
 				}else {
 					printf("[RECEIVED - INVALID]\n");
-					printData(*_handshake, 2);
+					printData(*_handshake, 1);
 					_status = 0;
 				}
 				_handshake->flags = 2;
-				_handshake->id = 10;
 				unsigned char _CRCmsg [sizeof(struct Packet)];
 				size_t _CRCmsgSize = buildCRCmsg((unsigned char *)&_CRCmsg, *_handshake);
 				_handshake->crc = calculateCRC16(_CRCmsg, _CRCmsgSize);
@@ -357,7 +361,10 @@ struct sockaddr_in connection(int _socket, struct Packet *_handshake){
 				_timeout.tv_sec = 5;
 				_timeout.tv_usec = 0;
 				_checker = select(FD_SETSIZE, &_fdSet, NULL, NULL, &_timeout);
-				if(_checker <= 0){
+				if(_checker < 0){
+				    perror("ERROR, select returned < 0\n");
+				    exit(EXIT_FAILURE);
+				}else if(_checker == 0){
 					printf("[TIMEOUT] \n");
 					printf("Reason          : No ACK received\n");
 					printf("-------------------------------------------\n");
